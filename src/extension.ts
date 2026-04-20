@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { EveClient } from './eveClient';
 import { ChatProvider } from './chatView';
+import { SetupWizard } from './setupWizard';
 
 let eveClient: EveClient;
 let chatProvider: ChatProvider;
@@ -43,7 +44,9 @@ export function activate(context: vscode.ExtensionContext) {
             });
             if (!instruction) { return; }
 
-            const prompt = `次のコードを修正してください。\n指示: ${instruction}\n\nコード:\n${selection}`;
+            const autoContext = config.get<boolean>('autoContext', true);
+            let prompt = `次のコードを修正してください。\n指示: ${instruction}\n\nコード:\n${selection}`;
+
             const result = await eveClient.send(prompt);
             if (result) {
                 editor.edit(builder => {
@@ -73,6 +76,21 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(result || '元に戻しました');
         })
     );
+
+    // セットアップウィザード
+    context.subscriptions.push(
+        vscode.commands.registerCommand('eve.setup', () => {
+            const wizard = new SetupWizard(eveClient);
+            wizard.show();
+        })
+    );
+
+    // 初回起動時にセットアップ表示
+    const shown = context.globalState.get('eve.setupShown', false);
+    if (!shown) {
+        vscode.commands.executeCommand('eve.setup');
+        context.globalState.update('eve.setupShown', true);
+    }
 
     vscode.window.showInformationMessage('EvE拡張を起動しました 🤖✨');
 }

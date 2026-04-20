@@ -14,10 +14,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
     updateModel(model: string): void {
         this.currentModel = model;
-        this.updateStatusBar();
-    }
-
-    private updateStatusBar(): void {
         if (this.view) {
             this.view.webview.postMessage({ type: 'model', value: this.currentModel });
         }
@@ -36,16 +32,57 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         view.webview.onDidReceiveMessage(async (msg) => {
             switch (msg.type) {
                 case 'chat': {
-                    const response = await this.client.send(msg.value);
-                    view.webview.postMessage({ type: 'response', value: response || '（応答なし）' });
+                    const config = vscode.workspace.getConfiguration('eve');
+                    const autoContext = config.get<boolean>('autoContext', true);
+                    let prompt = msg.value as string;
+
+                    // ファイルコンテキスト自動添付
+                    if (autoContext) {
+                        const context = this.getFileContext();
+                        if (context) {
+                            prompt = context + '\n---\n' + prompt;
+                        }
+                    }
+
+                    // ストリーミング送信
+                    view.webview.postMessage({ type: 'thinking' });
+                    this.client.sendStream(prompt, {
+                        onToken: (token) => {
+                            view.webview.postMessage({ type: 'stream', value: token });
+                        },
+                        onDone: (full) => {
+                            view.webview.postMessage({ type: 'done', value: full });
+                        },
+                        onError: (err) => {
+                            view.webview.postMessage({ type: 'error', value: err });
+                        }
+                    });
                     break;
                 }
                 case 'switchModel': {
                     vscode.commands.executeCommand('eve.switchModel');
                     break;
                 }
+                case 'toggleContext': {
+                    const cfg = vscode.workspace.getConfiguration('eve');
+                    const current = cfg.get<boolean>('autoContext', true);
+                    cfg.update('autoContext', !current, vscode.ConfigurationTarget.Global);
+                    view.webview.postMessage({ type: 'contextToggled', value: !current });
+                    break;
+                }
             }
         });
+    }
+
+    private getFileContext(): string | null {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { return null; }
+
+        const fileName = editor.document.fileName.split('/').pop() || 'unknown';
+        const content = editor.document.getText();
+        if (!content.trim()) { return null; }
+
+        return `[ファイル: ${fileName}]\n${content}`;
     }
 
     private getHtml(): string {
@@ -55,11 +92,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EvE Chat</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         :root {
             --bg: var(--vscode-editor-background);
             --fg: var(--vscode-editor-foreground);
             --accent: #ff6b35;
+            --accent-dim: rgba(255,107,53,0.15);
         }
         body {
             font-family: var(--vscode-font-family);
@@ -79,26 +120,53 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             opacity: 0.7;
         }
         #messages {
-            height: calc(100vh - 120px);
+            height: calc(100vh - 140px);
             overflow-y: auto;
             padding: 4px;
         }
         .msg {
             margin: 6px 0;
-            padding: 6px 8px;
+            padding: 8px 10px;
             border-radius: 6px;
             font-size: 13px;
-            line-height: 1.5;
-            white-space: pre-wrap;
+            line-height: 1.6;
             word-break: break-word;
         }
         .msg.user {
-            background: rgba(255,107,53,0.15);
+            background: var(--accent-dim);
             margin-left: 20px;
         }
         .msg.assistant {
-            background: rgba(100,100,100,0.15);
+            background: rgba(100,100,100,0.12);
             margin-right: 20px;
+        }
+        .msg.assistant pre {
+            background: rgba(0,0,0,0.3);
+            padding: 8px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .msg.assistant code {
+            font-family: var(--vscode-editor-font-family, 'Menlo', monospace);
+            font-size: 12px;
+        }
+        .msg.assistant p { margin: 4px 0; }
+        .msg.assistant ul, .msg.assistant ol { padding-left: 20px; }
+        .thinking {
+            text-align: center;
+            font-size: 12px;
+            opacity: 0.6;
+            padding: 8px;
+        }
+        .thinking::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0% { content: ''; }
+            33% { content: '.'; }
+            66% { content: '..'; }
+            100% { content: '...'; }
         }
         #input-area {
             display: flex;
@@ -129,12 +197,27 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
         #send:hover { opacity: 0.9; }
         #send:disabled { opacity: 0.5; cursor: default; }
+        #footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 4px;
+        }
+        #context-toggle {
+            font-size: 11px;
+            opacity: 0.6;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: var(--fg);
+        }
+        #context-toggle:hover { opacity: 1; }
         .hint {
             font-size: 11px;
             opacity: 0.5;
-            margin-top: 4px;
             text-align: center;
         }
+        .streaming-content { display: none; }
     </style>
 </head>
 <body>
@@ -150,6 +233,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         <input id="input" placeholder="日本語で指示..." autofocus />
         <button id="send">送信</button>
     </div>
+    <div id="footer">
+        <button id="context-toggle">📎 ファイル添付: ON</button>
+        <span class="hint" id="status"></span>
+    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
@@ -158,12 +245,42 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const messages = document.getElementById('messages');
         const switchModel = document.getElementById('switch-model');
         const modelLabel = document.getElementById('model-label');
+        const contextToggle = document.getElementById('context-toggle');
+        const status = document.getElementById('status');
+        let streamingDiv = null;
+        let streamingText = '';
+        let autoContext = true;
+
+        // Markdown設定
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true
+        });
 
         function addMessage(text, role) {
             const div = document.createElement('div');
             div.className = 'msg ' + role;
-            div.textContent = text;
+            if (role === 'assistant') {
+                div.innerHTML = marked.parse(text);
+            } else {
+                div.textContent = text;
+            }
             messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+            return div;
+        }
+
+        function setThinking() {
+            streamingDiv = document.createElement('div');
+            streamingDiv.className = 'msg assistant thinking';
+            streamingDiv.id = 'streaming';
+            streamingDiv.textContent = '🤔 考え中';
+            messages.appendChild(streamingDiv);
             messages.scrollTop = messages.scrollHeight;
         }
 
@@ -174,6 +291,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'chat', value: text });
             input.value = '';
             send.disabled = true;
+            status.textContent = '送信中...';
         }
 
         send.addEventListener('click', doSend);
@@ -188,13 +306,55 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'switchModel' });
         });
 
+        contextToggle.addEventListener('click', () => {
+            autoContext = !autoContext;
+            contextToggle.textContent = '📎 ファイル添付: ' + (autoContext ? 'ON' : 'OFF');
+            vscode.postMessage({ type: 'toggleContext' });
+        });
+
         window.addEventListener('message', (event) => {
             const msg = event.data;
-            if (msg.type === 'response') {
-                addMessage(msg.value, 'assistant');
-                send.disabled = false;
-            } else if (msg.type === 'model') {
-                modelLabel.textContent = msg.value;
+            switch (msg.type) {
+                case 'thinking':
+                    setThinking();
+                    streamingText = '';
+                    break;
+                case 'stream':
+                    if (!streamingDiv) { setThinking(); }
+                    streamingText += msg.value;
+                    if (streamingDiv.classList.contains('thinking')) {
+                        streamingDiv.classList.remove('thinking');
+                        streamingDiv.removeAttribute('id');
+                    }
+                    streamingDiv.innerHTML = marked.parse(streamingText);
+                    messages.scrollTop = messages.scrollHeight;
+                    break;
+                case 'done':
+                    if (streamingDiv) {
+                        streamingDiv.innerHTML = marked.parse(msg.value);
+                        streamingDiv = null;
+                    } else {
+                        addMessage(msg.value, 'assistant');
+                    }
+                    send.disabled = false;
+                    status.textContent = '';
+                    break;
+                case 'error':
+                    if (streamingDiv) {
+                        streamingDiv.remove();
+                        streamingDiv = null;
+                    }
+                    addMessage('⚠️ エラー: ' + msg.value, 'assistant');
+                    send.disabled = false;
+                    status.textContent = '';
+                    break;
+                case 'model':
+                    modelLabel.textContent = msg.value;
+                    break;
+                case 'contextToggled':
+                    autoContext = msg.value;
+                    contextToggle.textContent = '📎 ファイル添付: ' + (autoContext ? 'ON' : 'OFF');
+                    break;
             }
         });
     </script>

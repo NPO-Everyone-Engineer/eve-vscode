@@ -2,7 +2,7 @@
   "name": "eve-vscode",
   "displayName": "EvE — AI Coding Agent",
   "description": "EvE CLI を VS Code から使う。日本語でAIに指示してコードを書かせる。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "NPO-Everyone-Engineer",
   "license": "MIT",
   "repository": {
@@ -61,6 +61,10 @@
       {
         "command": "eve.undoLast",
         "title": "EvE: 直前の変更を元に戻す"
+      },
+      {
+        "command": "eve.setup",
+        "title": "EvE: セットアップウィザード"
       }
     ],
     "configuration": {
@@ -80,6 +84,11 @@
           "type": "boolean",
           "default": false,
           "description": "ツール実行を自動承認する（上級者向け）"
+        },
+        "eve.autoContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "開いているファイルを自動でAIに添付する"
         }
       }
     }
