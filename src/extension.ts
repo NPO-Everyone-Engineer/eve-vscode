@@ -8,7 +8,7 @@ let chatProvider: ChatProvider;
 export function activate(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('eve');
     const cliPath = config.get<string>('cliPath', 'eve-cli');
-    const defaultModel = config.get<string>('defaultModel', 'qwen3:8b');
+    const defaultModel = config.get<string>('defaultModel', 'glm-5.1:cloud');
 
     eveClient = new EveClient(cliPath, defaultModel);
     chatProvider = new ChatProvider(context.extensionUri, eveClient);
@@ -55,7 +55,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('eve.switchModel', async () => {
-            const models = ['qwen3:8b', 'qwen3:4b', 'glm-5.1:cloud', 'gemma4:31b-cloud', 'kimi-k2.5:cloud'];
+            const models = ['glm-5.1:cloud', 'kimi-k2.5:cloud', 'qwen3.5:397b-cloud', 'gemma4:31b-cloud', 'qwen3:8b', 'qwen3:4b'];
             const picked = await vscode.window.showQuickPick(models, {
                 placeHolder: 'モデルを選択'
             });

@@ -9,7 +9,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         private readonly extensionUri: vscode.Uri,
         private readonly client: EveClient
     ) {
-        this.currentModel = 'qwen3:8b';
+        this.currentModel = 'glm-5.1:cloud';
     }
 
     updateModel(model: string): void {

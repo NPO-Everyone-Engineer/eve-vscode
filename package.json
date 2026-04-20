@@ -73,8 +73,8 @@
         },
         "eve.defaultModel": {
           "type": "string",
-          "default": "qwen3:8b",
-          "description": "デフォルトモデル（例: qwen3:8b, glm-5.1:cloud）"
+          "default": "glm-5.1:cloud",
+          "description": "デフォルトモデル（例: glm-5.1:cloud, qwen3:8b, kimi-k2.5:cloud）"
         },
         "eve.autoApprove": {
           "type": "boolean",
