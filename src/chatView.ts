@@ -250,6 +250,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         let streamingDiv = null;
         let streamingText = '';
         let autoContext = true;
+        let renderTimer = null;
 
         // Markdown設定
         marked.setOptions({
@@ -261,6 +262,28 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             },
             breaks: true
         });
+
+        /**
+         * ストリーミングテキストからJSON断片を除去して表示用テキストを抽出
+         * eve-cli --output-format json の場合、出力が {"content": "..."} 形式になる
+         * ストリーミング中はJSON断片が混じるため、プレーンテキスト部分のみ表示
+         */
+        function cleanStreamText(raw) {
+            // JSON全体が完成している場合はパースを試みる
+            try {
+                const json = JSON.parse(raw);
+                return json.content || json.text || json.response || json.message || raw;
+            } catch {
+                // JSON断片またはプレーンテキスト
+                // JSONの開始記号を除去してプレーンテキストとして扱う
+                let cleaned = raw;
+                // 未完成のJSONパターンを除去: {"content": " のような開始部分
+                cleaned = cleaned.replace(/^\s*\{["\w]+:\s*"/, '');
+                // 末尾の " や } を除去
+                cleaned = cleaned.replace(/"\s*\}?\s*$/, '');
+                return cleaned;
+            }
+        }
 
         function addMessage(text, role) {
             const div = document.createElement('div');
@@ -282,6 +305,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             streamingDiv.textContent = '🤔 考え中';
             messages.appendChild(streamingDiv);
             messages.scrollTop = messages.scrollHeight;
+        }
+
+        /**
+         * ストリーミング表示をデバウンス（100ms）
+         * 高頻度で来るチャンクをまとめてレンダリングしてパフォーマンス向上
+         */
+        function scheduleRender() {
+            if (renderTimer) { clearTimeout(renderTimer); }
+            renderTimer = setTimeout(() => {
+                if (streamingDiv) {
+                    const cleaned = cleanStreamText(streamingText);
+                    streamingDiv.innerHTML = marked.parse(cleaned);
+                    messages.scrollTop = messages.scrollHeight;
+                }
+                renderTimer = null;
+            }, 100);
         }
 
         function doSend() {
@@ -326,10 +365,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         streamingDiv.classList.remove('thinking');
                         streamingDiv.removeAttribute('id');
                     }
-                    streamingDiv.innerHTML = marked.parse(streamingText);
-                    messages.scrollTop = messages.scrollHeight;
+                    scheduleRender();
                     break;
                 case 'done':
+                    // 最終レンダリング（デバウンス済みのものを即時上書き）
+                    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
                     if (streamingDiv) {
                         streamingDiv.innerHTML = marked.parse(msg.value);
                         streamingDiv = null;
@@ -340,6 +380,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     status.textContent = '';
                     break;
                 case 'error':
+                    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
                     if (streamingDiv) {
                         streamingDiv.remove();
                         streamingDiv = null;

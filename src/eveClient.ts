@@ -21,6 +21,35 @@ export class EveClient {
     }
 
     /**
+     * JSON出力からテキストを抽出する
+     * eve-cli --output-format json の場合: {"content": "...", "text": "..."} 形式
+     * ストリーミング中は不完全なJSONが来るため、完成時のみパースを試みる
+     */
+    private extractText(rawOutput: string): string {
+        const trimmed = rawOutput.trim();
+        if (!trimmed) { return ''; }
+
+        // JSONパースを試みる
+        try {
+            const json = JSON.parse(trimmed);
+            return json.content || json.text || json.response || json.message || trimmed;
+        } catch {
+            // JSONでなければそのまま返す
+            return trimmed;
+        }
+    }
+
+    /**
+     * ストリーミングチャンクから表示用テキストを抽出する
+     * 不完全なJSON断片はそのまま表示（完了時に正しくパースされる）
+     */
+    private extractStreamChunk(chunk: string): string {
+        // JSONの断片（{や"で始まる）はそのまま表示
+        // プレーンテキストはそのまま表示
+        return chunk;
+    }
+
+    /**
      * ストリーミング送信（リアルタイム表示用）
      */
     sendStream(prompt: string, callbacks: StreamCallbacks): ChildProcess {
@@ -37,30 +66,27 @@ export class EveClient {
         });
 
         let fullOutput = '';
+        let stderrOutput = '';
 
         proc.stdout.on('data', (data: Buffer) => {
             const chunk = data.toString();
             fullOutput += chunk;
-            callbacks.onToken(chunk);
+            // ストリーミング中はそのまま表示（JSON断片も含む）
+            callbacks.onToken(this.extractStreamChunk(chunk));
         });
 
         proc.stderr.on('data', (data: Buffer) => {
-            const chunk = data.toString();
-            if (chunk.includes('error') || chunk.includes('Error')) {
-                callbacks.onError(chunk);
-            }
+            stderrOutput += data.toString();
         });
 
         proc.on('close', (code) => {
             if (fullOutput.trim()) {
-                try {
-                    const json = JSON.parse(fullOutput);
-                    callbacks.onDone(json.content || json.text || fullOutput);
-                } catch {
-                    callbacks.onDone(fullOutput.trim());
-                }
+                // 完了時にJSONパースを試みて、テキストを抽出
+                const text = this.extractText(fullOutput);
+                callbacks.onDone(text);
             } else if (code !== 0) {
-                callbacks.onError(`eve-cli が終了コード ${code} で終了しました`);
+                const errMsg = stderrOutput.trim() || `eve-cli が終了コード ${code} で終了しました`;
+                callbacks.onError(errMsg);
             }
         });
 
