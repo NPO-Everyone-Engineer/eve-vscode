@@ -1,0 +1,100 @@
+{
+  "name": "eve-vscode",
+  "displayName": "EvE — AI Coding Agent",
+  "description": "EvE CLI を VS Code から使う。日本語でAIに指示してコードを書かせる。",
+  "version": "0.1.0",
+  "publisher": "NPO-Everyone-Engineer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NPO-Everyone-Engineer/eve-vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Chat"
+  ],
+  "keywords": [
+    "ai",
+    "coding",
+    "agent",
+    "ollama",
+    "japanese"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "eve-chat",
+          "title": "EvE",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "eve-chat": [
+        {
+          "type": "webview",
+          "id": "eve.chatView",
+          "name": "EvE Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "eve.chat",
+        "title": "EvE: チャットを開く"
+      },
+      {
+        "command": "eve.editSelection",
+        "title": "EvE: 選択範囲をAIに修正させる"
+      },
+      {
+        "command": "eve.switchModel",
+        "title": "EvE: モデルを切り替え"
+      },
+      {
+        "command": "eve.undoLast",
+        "title": "EvE: 直前の変更を元に戻す"
+      }
+    ],
+    "configuration": {
+      "title": "EvE",
+      "properties": {
+        "eve.cliPath": {
+          "type": "string",
+          "default": "eve-cli",
+          "description": "eve-cli のパス（デフォルト: PATH上のeve-cli）"
+        },
+        "eve.defaultModel": {
+          "type": "string",
+          "default": "qwen3:8b",
+          "description": "デフォルトモデル（例: qwen3:8b, glm-5.1:cloud）"
+        },
+        "eve.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "ツール実行を自動承認する（上級者向け）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
