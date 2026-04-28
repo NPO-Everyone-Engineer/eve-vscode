@@ -17,9 +17,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         this.loadHistory();
     }
 
-    /** globalStateから会話履歴を読み込み */
+    /** workspaceStateから会話履歴を読み込み（ワークスペース間で漏えいしない） */
     private loadHistory(): void {
-        const saved = this.context.globalState.get<Array<{ role: 'user' | 'assistant'; content: string }>>(
+        const saved = this.context.workspaceState.get<Array<{ role: 'user' | 'assistant'; content: string }>>(
             ChatProvider.HISTORY_KEY
         );
         if (saved && Array.isArray(saved)) {
@@ -27,10 +27,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** globalStateに会話履歴を保存 */
+    /** workspaceStateに会話履歴を保存 */
     private saveHistory(): void {
         const toSave = this.conversationHistory.slice(-ChatProvider.MAX_HISTORY);
-        this.context.globalState.update(ChatProvider.HISTORY_KEY, toSave);
+        this.context.workspaceState.update(ChatProvider.HISTORY_KEY, toSave);
     }
 
     /** 会話履歴をプロンプト用の文字列に変換 */
@@ -62,7 +62,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             localResourceRoots: [this.extensionUri]
         };
 
-        view.webview.html = this.getHtml();
+        view.webview.html = this.getHtml(view.webview);
 
         view.webview.onDidReceiveMessage(async (msg) => {
             switch (msg.type) {
@@ -132,6 +132,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /** CSP nonce を生成（暗号学的に安全なランダム値） */
+    private generateNonce(): string {
+        const array = new Uint32Array(4);
+        // Node.js の crypto が使える環境では getRandomValues が利用可能
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+            crypto.getRandomValues(array);
+        } else {
+            // フォールバック: 簡易乱数（本番では crypto 推奨）
+            for (let i = 0; i < array.length; i++) {
+                array[i] = Math.floor(Math.random() * 0xFFFFFFFF);
+            }
+        }
+        return Array.from(array, n => n.toString(16).padStart(8, '0')).join('');
+    }
+
     private getFileContext(): string | null {
         const editor = vscode.window.activeTextEditor;
         if (!editor) { return null; }
@@ -143,17 +158,39 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         return `[ファイル: ${fileName}]\n${content}`;
     }
 
-    private getHtml(): string {
+    private getHtml(webview: vscode.Webview): string {
+        // ローカルバンドルしたライブラリのURIを生成
+        const markedUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'marked.min.js')
+        );
+        const hljsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'highlight.min.js')
+        );
+        const hljsCssUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'github-dark.min.css')
+        );
+
+        // CSP nonce を生成（インラインスクリプト用）
+        const nonce = this.generateNonce();
+
         return `<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'none';
+        style-src ${webview.cspSource} 'nonce-${nonce}';
+        script-src ${webview.cspSource} 'nonce-${nonce}';
+        img-src ${webview.cspSource} data:;
+        font-src ${webview.cspSource};
+        connect-src ${webview.cspSource};
+    ">
     <title>EvE Chat</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <style>
+    <link rel="stylesheet" href="${hljsCssUri}">
+    <script src="${markedUri}"></script>
+    <script src="${hljsUri}"></script>
+    <style nonce="${nonce}">
         :root {
             --bg: var(--vscode-editor-background);
             --fg: var(--vscode-editor-foreground);
@@ -304,6 +341,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
         .streaming-content { display: none; }
     </style>
+    <style nonce="${nonce}">
+        /* CSP nonce 用の空スタイルブロック（インラインスタイルの許可） */
+    </style>
 </head>
 <body>
     <div id="header">
@@ -325,7 +365,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         <span class="hint" id="status"></span>
     </div>
 
-    <script>
+    <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         const input = document.getElementById('input');
         const send = document.getElementById('send');
@@ -374,11 +414,100 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        /**
+         * HTMLエスケープ（エラーメッセージなどのユーザー入力を安全に表示）
+         */
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        /**
+         * 許可するHTMLタグのホワイトリスト
+         * marked.js が生成するタグ + 基本的なインライン/ブロック要素
+         */
+        const ALLOWED_TAGS = new Set([
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'p', 'br', 'hr',
+            'ul', 'ol', 'li',
+            'blockquote', 'pre', 'code',
+            'table', 'thead', 'tbody', 'tr', 'th', 'td',
+            'em', 'strong', 'del', 'a', 'img',
+            'span', 'div',
+            'input'  // チェックボックス（markedのタスクリスト用）
+        ]);
+
+        /** 許可する属性名 */
+        const ALLOWED_ATTRS = new Set([
+            'href', 'src', 'alt', 'title', 'class', 'id',
+            'type', 'checked', 'disabled',  // input用
+            'lang', 'dir'
+        ]);
+
+        /** 危険な要素を再帰的に除去する */
+        function sanitizeNode(node) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+                const tag = node.tagName.toLowerCase();
+                // 許可リストにないタグは要素ごと削除
+                if (!ALLOWED_TAGS.has(tag)) {
+                    node.remove();
+                    return;
+                }
+                // 危険な属性を除去
+                const attrsToRemove = [];
+                for (let i = 0; i < node.attributes.length; i++) {
+                    const attr = node.attributes[i];
+                    const name = attr.name.toLowerCase();
+                    // イベントハンドラは常に除去
+                    if (name.startsWith('on')) {
+                        attrsToRemove.push(name);
+                        continue;
+                    }
+                    // 許可リストにない属性は除去
+                    if (!ALLOWED_ATTRS.has(name)) {
+                        attrsToRemove.push(name);
+                        continue;
+                    }
+                    // javascript: URL を無害化
+                    const val = attr.value.toLowerCase().trim();
+                    if ((name === 'href' || name === 'src') && val.startsWith('javascript:')) {
+                        if (name === 'href') {
+                            node.setAttribute('href', '#');
+                        } else {
+                            node.removeAttribute(name);
+                        }
+                    }
+                }
+                attrsToRemove.forEach(a => node.removeAttribute(a));
+            }
+            // 子ノードを再帰処理（逆順で処理して削除に対応）
+            let child = node.firstChild;
+            while (child) {
+                const next = child.nextSibling;
+                sanitizeNode(child);
+                child = next;
+            }
+        }
+
+        /**
+         * AI出力をサニタイズしてからMarkdown描画
+         * DOMParserで実HTMLをパースし、ホワイトリスト方式で安全な要素のみ許可
+         */
+        function sanitizeAndParse(text) {
+            const rawHtml = marked.parse(text);
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(rawHtml, 'text/html');
+            // body内の全ノードをサニタイズ
+            sanitizeNode(doc.body);
+            return doc.body.innerHTML;
+        }
+
         function addMessage(text, role) {
             const div = document.createElement('div');
             div.className = 'msg ' + role;
             if (role === 'assistant') {
-                div.innerHTML = marked.parse(text);
+                div.innerHTML = sanitizeAndParse(text);
                 attachCopyButtons(div);
             } else {
                 div.textContent = text;
@@ -426,7 +555,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             renderTimer = setTimeout(() => {
                 if (streamingDiv) {
                     const cleaned = cleanStreamText(streamingText);
-                    streamingDiv.innerHTML = marked.parse(cleaned);
+                    streamingDiv.innerHTML = sanitizeAndParse(cleaned);
                     attachCopyButtons(streamingDiv);
                     messages.scrollTop = messages.scrollHeight;
                 }
@@ -492,7 +621,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     // 最終レンダリング（デバウンス済みのものを即時上書き）
                     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
                     if (streamingDiv) {
-                        streamingDiv.innerHTML = marked.parse(msg.value);
+                        streamingDiv.innerHTML = sanitizeAndParse(msg.value);
                         attachCopyButtons(streamingDiv);
                         streamingDiv = null;
                     } else {
@@ -508,7 +637,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         streamingDiv.remove();
                         streamingDiv = null;
                     }
-                    addMessage('⚠️ エラー: ' + msg.value, 'assistant');
+                    addMessage('⚠️ エラー: ' + escapeHtml(msg.value), 'assistant');
                     send.style.display = 'inline-block';
                     stop.style.display = 'none';
                     status.textContent = '';
@@ -517,7 +646,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
                     if (streamingDiv) {
                         if (streamingText.trim()) {
-                            streamingDiv.innerHTML = marked.parse(cleanStreamText(streamingText)) + '<br><em>（中断されました）</em>';
+                            streamingDiv.innerHTML = sanitizeAndParse(cleanStreamText(streamingText)) + '<br><em>（中断されました）</em>';
                             attachCopyButtons(streamingDiv);
                         } else {
                             streamingDiv.remove();

@@ -9,11 +9,17 @@ export interface StreamCallbacks {
 export class EveClient {
     private cliPath: string;
     private model: string;
+    private autoApprove: boolean;
     private proc: ChildProcess | null = null;
 
-    constructor(cliPath: string, model: string) {
+    constructor(cliPath: string, model: string, autoApprove: boolean = false) {
         this.cliPath = cliPath;
         this.model = model;
+        this.autoApprove = autoApprove;
+    }
+
+    setAutoApprove(autoApprove: boolean): void {
+        this.autoApprove = autoApprove;
     }
 
     switchModel(model: string): void {
@@ -57,9 +63,11 @@ export class EveClient {
             '--headless',
             '--output-format', 'json',
             '--model', this.model,
-            '-p', prompt,
-            '-y'
+            '-p', prompt
         ];
+        if (this.autoApprove) {
+            args.push('-y');
+        }
 
         const proc = spawn(this.cliPath, args, {
             stdio: ['pipe', 'pipe', 'pipe']

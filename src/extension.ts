@@ -10,8 +10,19 @@ export function activate(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('eve');
     const cliPath = config.get<string>('cliPath', 'eve-cli');
     const defaultModel = config.get<string>('defaultModel', 'glm-5.1:cloud');
+    const autoApprove = config.get<boolean>('autoApprove', false);
 
-    eveClient = new EveClient(cliPath, defaultModel);
+    eveClient = new EveClient(cliPath, defaultModel, autoApprove);
+
+    // autoApprove設定変更を監視
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('eve.autoApprove')) {
+                const newVal = vscode.workspace.getConfiguration('eve').get<boolean>('autoApprove', false);
+                eveClient.setAutoApprove(newVal);
+            }
+        })
+    );
     chatProvider = new ChatProvider(context.extensionUri, eveClient, context);
 
     // Webview登録
