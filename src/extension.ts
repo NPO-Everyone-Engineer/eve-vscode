@@ -12,7 +12,7 @@ export function activate(context: vscode.ExtensionContext) {
     const defaultModel = config.get<string>('defaultModel', 'glm-5.1:cloud');
 
     eveClient = new EveClient(cliPath, defaultModel);
-    chatProvider = new ChatProvider(context.extensionUri, eveClient);
+    chatProvider = new ChatProvider(context.extensionUri, eveClient, context);
 
     // Webview登録
     context.subscriptions.push(
@@ -58,7 +58,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('eve.switchModel', async () => {
-            const models = ['glm-5.1:cloud', 'kimi-k2.5:cloud', 'qwen3.5:397b-cloud', 'gemma4:31b-cloud', 'qwen3:8b', 'qwen3:4b'];
+            // Ollamaから動的取得、失敗時はハードコードフォールバック
+            let models = await eveClient.listModels();
+            if (models.length === 0) {
+                models = ['glm-5.1:cloud', 'kimi-k2.5:cloud', 'qwen3.5:397b-cloud', 'gemma4:31b-cloud', 'qwen3:8b', 'qwen3:4b'];
+            }
             const picked = await vscode.window.showQuickPick(models, {
                 placeHolder: 'モデルを選択'
             });

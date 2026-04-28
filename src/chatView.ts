@@ -4,12 +4,47 @@ import { EveClient } from './eveClient';
 export class ChatProvider implements vscode.WebviewViewProvider {
     private view: vscode.WebviewView | undefined;
     private currentModel: string;
+    private conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    private static readonly HISTORY_KEY = 'eve.conversationHistory';
+    private static readonly MAX_HISTORY = 50; // 最大保存メッセージ数
 
     constructor(
         private readonly extensionUri: vscode.Uri,
-        private readonly client: EveClient
+        private readonly client: EveClient,
+        private readonly context: vscode.ExtensionContext
     ) {
         this.currentModel = 'glm-5.1:cloud';
+        this.loadHistory();
+    }
+
+    /** globalStateから会話履歴を読み込み */
+    private loadHistory(): void {
+        const saved = this.context.globalState.get<Array<{ role: 'user' | 'assistant'; content: string }>>(
+            ChatProvider.HISTORY_KEY
+        );
+        if (saved && Array.isArray(saved)) {
+            this.conversationHistory = saved.slice(-ChatProvider.MAX_HISTORY);
+        }
+    }
+
+    /** globalStateに会話履歴を保存 */
+    private saveHistory(): void {
+        const toSave = this.conversationHistory.slice(-ChatProvider.MAX_HISTORY);
+        this.context.globalState.update(ChatProvider.HISTORY_KEY, toSave);
+    }
+
+    /** 会話履歴をプロンプト用の文字列に変換 */
+    private buildHistoryPrompt(): string {
+        if (this.conversationHistory.length === 0) { return ''; }
+        return this.conversationHistory
+            .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.content}`)
+            .join('\n') + '\n';
+    }
+
+    /** 会話履歴をクリア */
+    private clearHistory(): void {
+        this.conversationHistory = [];
+        this.saveHistory();
     }
 
     updateModel(model: string): void {
@@ -36,6 +71,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     const autoContext = config.get<boolean>('autoContext', true);
                     let prompt = msg.value as string;
 
+                    // 会話履歴をプレフィックスに追加（マルチターン）
+                    const history = this.buildHistoryPrompt();
+                    if (history) {
+                        prompt = '[これまでの会話]\n' + history + '---\n[今回の指示]\n' + prompt;
+                    }
+
                     // ファイルコンテキスト自動添付
                     if (autoContext) {
                         const context = this.getFileContext();
@@ -44,6 +85,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         }
                     }
 
+                    // ユーザーメッセージを履歴に追加
+                    this.conversationHistory.push({ role: 'user', content: msg.value as string });
+                    this.saveHistory();
+
                     // ストリーミング送信
                     view.webview.postMessage({ type: 'thinking' });
                     this.client.sendStream(prompt, {
@@ -51,6 +96,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                             view.webview.postMessage({ type: 'stream', value: token });
                         },
                         onDone: (full) => {
+                            // AIの応答を履歴に追加
+                            this.conversationHistory.push({ role: 'assistant', content: full });
+                            this.saveHistory();
                             view.webview.postMessage({ type: 'done', value: full });
                         },
                         onError: (err) => {
@@ -59,8 +107,18 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     });
                     break;
                 }
+                case 'newConversation': {
+                    this.clearHistory();
+                    view.webview.postMessage({ type: 'conversationCleared' });
+                    break;
+                }
                 case 'switchModel': {
                     vscode.commands.executeCommand('eve.switchModel');
+                    break;
+                }
+                case 'stop': {
+                    this.client.kill();
+                    view.webview.postMessage({ type: 'stopped' });
                     break;
                 }
                 case 'toggleContext': {
@@ -145,7 +203,23 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             padding: 8px;
             border-radius: 4px;
             overflow-x: auto;
+            position: relative;
         }
+        .copy-btn {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            padding: 2px 6px;
+            font-size: 11px;
+            background: rgba(255,255,255,0.1);
+            color: var(--fg);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 3px;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .msg.assistant pre:hover .copy-btn { opacity: 1; }
         .msg.assistant code {
             font-family: var(--vscode-editor-font-family, 'Menlo', monospace);
             font-size: 12px;
@@ -197,6 +271,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
         #send:hover { opacity: 0.9; }
         #send:disabled { opacity: 0.5; cursor: default; }
+        #stop {
+            display: none;
+            padding: 6px 12px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #stop:hover { opacity: 0.9; }
         #footer {
             display: flex;
             justify-content: space-between;
@@ -224,6 +309,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     <div id="header">
         <span style="font-weight:bold;">🤖 EvE</span>
         <span id="model-label">${this.currentModel}</span>
+        <button id="new-conversation" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:11px;opacity:0.6;" title="新規会話">🆕</button>
         <button id="switch-model" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:11px;">切替</button>
     </div>
     <div id="messages">
@@ -232,6 +318,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     <div id="input-area">
         <input id="input" placeholder="日本語で指示..." autofocus />
         <button id="send">送信</button>
+        <button id="stop">⏹ 停止</button>
     </div>
     <div id="footer">
         <button id="context-toggle">📎 ファイル添付: ON</button>
@@ -242,8 +329,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const vscode = acquireVsCodeApi();
         const input = document.getElementById('input');
         const send = document.getElementById('send');
+        const stop = document.getElementById('stop');
         const messages = document.getElementById('messages');
         const switchModel = document.getElementById('switch-model');
+        const newConversation = document.getElementById('new-conversation');
         const modelLabel = document.getElementById('model-label');
         const contextToggle = document.getElementById('context-toggle');
         const status = document.getElementById('status');
@@ -290,12 +379,33 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             div.className = 'msg ' + role;
             if (role === 'assistant') {
                 div.innerHTML = marked.parse(text);
+                attachCopyButtons(div);
             } else {
                 div.textContent = text;
             }
             messages.appendChild(div);
             messages.scrollTop = messages.scrollHeight;
             return div;
+        }
+
+        function attachCopyButtons(container) {
+            container.querySelectorAll('pre').forEach(pre => {
+                if (pre.querySelector('.copy-btn')) { return; }
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = '📋 コピー';
+                btn.addEventListener('click', () => {
+                    const code = pre.querySelector('code') || pre;
+                    navigator.clipboard.writeText(code.textContent || '').then(() => {
+                        btn.textContent = '✅ コピー済';
+                        setTimeout(() => { btn.textContent = '📋 コピー'; }, 2000);
+                    }).catch(() => {
+                        btn.textContent = '❌ 失敗';
+                        setTimeout(() => { btn.textContent = '📋 コピー'; }, 2000);
+                    });
+                });
+                pre.appendChild(btn);
+            });
         }
 
         function setThinking() {
@@ -317,6 +427,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 if (streamingDiv) {
                     const cleaned = cleanStreamText(streamingText);
                     streamingDiv.innerHTML = marked.parse(cleaned);
+                    attachCopyButtons(streamingDiv);
                     messages.scrollTop = messages.scrollHeight;
                 }
                 renderTimer = null;
@@ -329,11 +440,17 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             addMessage(text, 'user');
             vscode.postMessage({ type: 'chat', value: text });
             input.value = '';
-            send.disabled = true;
+            send.style.display = 'none';
+            stop.style.display = 'inline-block';
             status.textContent = '送信中...';
         }
 
+        function doStop() {
+            vscode.postMessage({ type: 'stop' });
+        }
+
         send.addEventListener('click', doSend);
+        stop.addEventListener('click', doStop);
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -343,6 +460,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
         switchModel.addEventListener('click', () => {
             vscode.postMessage({ type: 'switchModel' });
+        });
+
+        newConversation.addEventListener('click', () => {
+            vscode.postMessage({ type: 'newConversation' });
         });
 
         contextToggle.addEventListener('click', () => {
@@ -372,11 +493,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
                     if (streamingDiv) {
                         streamingDiv.innerHTML = marked.parse(msg.value);
+                        attachCopyButtons(streamingDiv);
                         streamingDiv = null;
                     } else {
                         addMessage(msg.value, 'assistant');
                     }
-                    send.disabled = false;
+                    send.style.display = 'inline-block';
+                    stop.style.display = 'none';
                     status.textContent = '';
                     break;
                 case 'error':
@@ -386,7 +509,23 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         streamingDiv = null;
                     }
                     addMessage('⚠️ エラー: ' + msg.value, 'assistant');
-                    send.disabled = false;
+                    send.style.display = 'inline-block';
+                    stop.style.display = 'none';
+                    status.textContent = '';
+                    break;
+                case 'stopped':
+                    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+                    if (streamingDiv) {
+                        if (streamingText.trim()) {
+                            streamingDiv.innerHTML = marked.parse(cleanStreamText(streamingText)) + '<br><em>（中断されました）</em>';
+                            attachCopyButtons(streamingDiv);
+                        } else {
+                            streamingDiv.remove();
+                        }
+                        streamingDiv = null;
+                    }
+                    send.style.display = 'inline-block';
+                    stop.style.display = 'none';
                     status.textContent = '';
                     break;
                 case 'model':
@@ -395,6 +534,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 case 'contextToggled':
                     autoContext = msg.value;
                     contextToggle.textContent = '📎 ファイル添付: ' + (autoContext ? 'ON' : 'OFF');
+                    break;
+                case 'conversationCleared':
+                    messages.innerHTML = '<div class="hint">新しい会話を始めましょう。日本語で話しかけてOK。</div>';
+                    streamingDiv = null;
+                    streamingText = '';
                     break;
             }
         });
