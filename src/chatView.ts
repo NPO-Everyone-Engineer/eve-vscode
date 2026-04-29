@@ -72,9 +72,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     let prompt = msg.value as string;
 
                     // 会話履歴をプレフィックスに追加（マルチターン）
-                    const history = this.buildHistoryPrompt();
-                    if (history) {
-                        prompt = '[これまでの会話]\n' + history + '---\n[今回の指示]\n' + prompt;
+                    const autoHistory = config.get<boolean>('autoHistory', true);
+                    if (autoHistory) {
+                        const history = this.buildHistoryPrompt();
+                        if (history) {
+                            prompt = '[これまでの会話]\n' + history + '---\n[今回の指示]\n' + prompt;
+                        }
                     }
 
                     // ファイルコンテキスト自動添付
@@ -126,6 +129,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     const current = cfg.get<boolean>('autoContext', true);
                     cfg.update('autoContext', !current, vscode.ConfigurationTarget.Global);
                     view.webview.postMessage({ type: 'contextToggled', value: !current });
+                    break;
+                }
+                case 'toggleHistory': {
+                    const cfg = vscode.workspace.getConfiguration('eve');
+                    const current = cfg.get<boolean>('autoHistory', true);
+                    cfg.update('autoHistory', !current, vscode.ConfigurationTarget.Global);
+                    view.webview.postMessage({ type: 'historyToggled', value: !current });
                     break;
                 }
             }
@@ -334,6 +344,15 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             color: var(--fg);
         }
         #context-toggle:hover { opacity: 1; }
+        #history-toggle {
+            font-size: 11px;
+            opacity: 0.6;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: var(--fg);
+        }
+        #history-toggle:hover { opacity: 1; }
         .hint {
             font-size: 11px;
             opacity: 0.5;
@@ -362,6 +381,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="footer">
         <button id="context-toggle">📎 ファイル添付: ON</button>
+        <button id="history-toggle">💬 会話履歴: ON</button>
         <span class="hint" id="status"></span>
     </div>
 
@@ -375,10 +395,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const newConversation = document.getElementById('new-conversation');
         const modelLabel = document.getElementById('model-label');
         const contextToggle = document.getElementById('context-toggle');
+        const historyToggle = document.getElementById('history-toggle');
         const status = document.getElementById('status');
         let streamingDiv = null;
         let streamingText = '';
         let autoContext = true;
+        let autoHistory = true;
         let renderTimer = null;
 
         // Markdown設定
@@ -601,6 +623,12 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'toggleContext' });
         });
 
+        historyToggle.addEventListener('click', () => {
+            autoHistory = !autoHistory;
+            historyToggle.textContent = '💬 会話履歴: ' + (autoHistory ? 'ON' : 'OFF');
+            vscode.postMessage({ type: 'toggleHistory' });
+        });
+
         window.addEventListener('message', (event) => {
             const msg = event.data;
             switch (msg.type) {
@@ -663,6 +691,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 case 'contextToggled':
                     autoContext = msg.value;
                     contextToggle.textContent = '📎 ファイル添付: ' + (autoContext ? 'ON' : 'OFF');
+                    break;
+                case 'historyToggled':
+                    autoHistory = msg.value;
+                    historyToggle.textContent = '💬 会話履歴: ' + (autoHistory ? 'ON' : 'OFF');
                     break;
                 case 'conversationCleared':
                     messages.innerHTML = '<div class="hint">新しい会話を始めましょう。日本語で話しかけてOK。</div>';

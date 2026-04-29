@@ -89,6 +89,11 @@
           "type": "boolean",
           "default": true,
           "description": "開いているファイルを自動でAIに添付する"
+        },
+        "eve.autoHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "会話履歴を自動で次のプロンプトに含める（OFFにすると毎回独立した会話になります）"
         }
       }
     }

@@ -95,6 +95,9 @@ export class EveClient {
             } else if (code !== 0) {
                 const errMsg = stderrOutput.trim() || `eve-cli が終了コード ${code} で終了しました`;
                 callbacks.onError(errMsg);
+            } else {
+                // 正常終了だが出力が空（例: 空プロンプト、ツール実行のみ）
+                callbacks.onDone('');
             }
         });
 
